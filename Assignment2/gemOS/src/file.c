@@ -102,7 +102,7 @@ void do_file_exit(struct exec_context *ctx)
     for(int i=0;i<MAX_OPEN_FILES;i++){
         if(ctx->files[i]){
             generic_close(ctx->files[i]);
-            ctx->files[i]=NULL;
+            /* ctx->files[i]=NULL; */
         }
     }
 }
@@ -139,6 +139,7 @@ long generic_close(struct file *filep)
                 }
             }
             free_file_object(filep);
+            return 0;
         }
         else{
             free_file_object(filep);
@@ -161,6 +162,9 @@ static int do_read_regular(struct file *filep, char * buff, u32 count)
     }
     if(filep->mode&0x1){
         int bytes_read = flat_read(filep->inode, buff, count, &(filep->offp));
+        if( bytes_read < 0 ){
+            return -EINVAL;
+        }
         filep->offp+=bytes_read;
         return bytes_read;
     }
@@ -185,11 +189,9 @@ static int do_write_regular(struct file *filep, char * buff, u32 count)
     if(filep->mode&0x2){
         int bytes_written = flat_write(filep->inode, buff, count, &(filep->offp));
         if( bytes_written < 0 ){
-            filep->offp+=bytes_written;
-        }
-        else{
             return -EINVAL;
         }
+        filep->offp+=bytes_written;
         return bytes_written;
     }
     else{

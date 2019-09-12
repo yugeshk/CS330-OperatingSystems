@@ -102,6 +102,7 @@ void do_file_exit(struct exec_context *ctx)
     for(int i=0;i<MAX_OPEN_FILES;i++){
         if(ctx->files[i]){
             generic_close(ctx->files[i]);
+            ctx->files[i]=NULL;
         }
     }
 }
@@ -114,6 +115,9 @@ long generic_close(struct file *filep)
    * 
    */
     int ret_fd = -EINVAL; 
+    if(filep == NULL){
+        return ret_fd;
+    }
     if(--(filep->ref_count)){
       return filep->ref_count;
     }
@@ -122,7 +126,18 @@ long generic_close(struct file *filep)
             free_file_object(filep);
         }
         else if(filep->type==PIPE){
-            free_pipe_info(filep->pipe);
+            if(filep->mode == O_READ){
+                filep->pipe->is_ropen = 0;
+                if(filep->pipe->is_wopen == 0){
+                    free_pipe_info(filep->pipe);
+                }
+            }
+            else if(filep->mode == O_WRITE){
+                filep->pipe->is_wopen = 0;
+                if(filep->pipe->is_ropen == 0){
+                    free_pipe_info(filep->pipe);
+                }
+            }
             free_file_object(filep);
         }
         else{
@@ -141,6 +156,9 @@ static int do_read_regular(struct file *filep, char * buff, u32 count)
     *  Incase of Error return valid Error code 
     * */
     int ret_fd = -EINVAL; 
+    if(filep == NULL || buff == NULL){
+        return ret_fd;
+    }
     if(filep->mode&0x1){
         int bytes_read = flat_read(filep->inode, buff, count, &(filep->offp));
         filep->offp+=bytes_read;
@@ -161,9 +179,17 @@ static int do_write_regular(struct file *filep, char * buff, u32 count)
     *   Incase of Error return valid Error code 
     * */
     int ret_fd = -EINVAL; 
+    if(filep == NULL || buff == NULL){
+        return ret_fd;
+    }
     if(filep->mode&0x2){
         int bytes_written = flat_write(filep->inode, buff, count, &(filep->offp));
-        filep->offp+=bytes_written;
+        if( bytes_written < 0 ){
+            filep->offp+=bytes_written;
+        }
+        else{
+            return -EINVAL;
+        }
         return bytes_written;
     }
     else{
@@ -179,25 +205,28 @@ static long do_lseek_regular(struct file *filep, long offset, int whence)
     *   Incase of Error return valid Error code 
     * */
     int ret_fd = -EINVAL; 
-    if(filep->mode&0x1){
-       if(whence==SEEK_SET){
-            filep->offp=0; 
-       } 
-       else if(whence==SEEK_CUR){
-        filep->offp=filep->offp;
-       }
-       else if(whence==SEEK_END){
-        filep->offp=filep->inode->file_size;
-       }
-       else{
-        return -EINVAL;
-       }
-       if(filep->offp+offset>filep->inode->file_size){
-        return -EINVAL;
-       }
-       return filep->offp;
+    if(filep == NULL){
+        return ret_fd;
     }
-    return ret_fd;
+    unsigned int offp;
+    if(whence==SEEK_SET){
+        offp=0; 
+    } 
+    else if(whence==SEEK_CUR){
+        offp=filep->offp;
+    }
+    else if(whence==SEEK_END){
+        offp=filep->inode->file_size;
+    }
+    else{
+        return ret_fd;
+    }
+    offp+=offset;
+    if(offp >= FILE_SIZE || offp < 0){
+        return ret_fd;
+    }
+    filep->offp = offp;
+    return filep->offp;
 }
 
 extern int do_regular_file_open(struct exec_context *ctx, char* filename, u64 flags, u64 mode)
@@ -217,7 +246,7 @@ extern int do_regular_file_open(struct exec_context *ctx, char* filename, u64 fl
        if((flags&file_inode->mode&0x7)==(flags&0x7)){
            struct file* file_ptr = alloc_file();
            file_ptr->type = REGULAR;
-           file_ptr->mode = mode;
+           file_ptr->mode = flags;
            file_ptr->offp = 0;
            file_ptr->ref_count = 1;
            file_ptr->inode = file_inode;
@@ -226,7 +255,7 @@ extern int do_regular_file_open(struct exec_context *ctx, char* filename, u64 fl
            file_ptr->fops->lseek = do_lseek_regular;
            file_ptr->fops->close = generic_close;
            file_ptr->pipe = NULL;
-           int fd=0;
+           int fd=3;
            while(ctx->files[fd]){
               fd++; 
            }
@@ -238,31 +267,37 @@ extern int do_regular_file_open(struct exec_context *ctx, char* filename, u64 fl
        }
     }
     else{
-        if(flags&O_CREAT==O_CREAT){
+        if((flags&O_CREAT)==O_CREAT){
             file_inode = create_inode(filename, mode);
-            if((flags&file_inode->mode&0x7)==(flags&0x7)){
-               struct file* file_ptr = alloc_file();
-               file_ptr->type = REGULAR;
-               file_ptr->mode = mode;
-               file_ptr->offp = 0;
-               file_ptr->ref_count = 1;
-               file_ptr->inode = file_inode;
-               file_ptr->fops->read = do_read_regular;
-               file_ptr->fops->write = do_write_regular;
-               file_ptr->fops->lseek = do_lseek_regular;
-               file_ptr->fops->close = generic_close;
-               file_ptr->pipe = NULL;
-               int fd=0;
-               while(ctx->files[fd]){
-                  fd++; 
+            /* if((flags&file_inode->mode&0x7)==(flags&0x7)){ */
+            struct file* file_ptr = alloc_file();
+            file_ptr->type = REGULAR;
+            file_ptr->mode = flags;
+            file_ptr->offp = 0;
+            file_ptr->ref_count = 1;
+            file_ptr->inode = file_inode;
+            file_ptr->fops->read = do_read_regular;
+            file_ptr->fops->write = do_write_regular;
+            file_ptr->fops->lseek = do_lseek_regular;
+            file_ptr->fops->close = generic_close;
+            file_ptr->pipe = NULL;
+            int fd=3;
+            while(ctx->files[fd]){
+               fd++; 
+               if(fd==MAX_OPEN_FILES){
+                 return -EOTHERS;
                }
-               ctx->files[fd]=file_ptr;
-               return fd;
             }
-            else{
-               return -EACCES;
-            }
+            ctx->files[fd]=file_ptr;
+            return fd;
+            /* } */
+            /* else{ */
+            /*    return -EACCES; */
+            /* } */
         }    
+        else{
+            return -EINVAL;
+        }
     }
     return ret_fd;
 }
@@ -275,12 +310,18 @@ int fd_dup(struct exec_context *current, int oldfd)
       *  Incase of Error return valid Error code 
       * */
     int ret_fd = -EINVAL; 
+    if(oldfd >= MAX_OPEN_FILES){
+        return -EOTHERS;
+    }
     if(current->files[oldfd]){
-        int new_fd=0;
+        int new_fd=3;
         while(current->files[new_fd]){
             new_fd++;
+            //check for maximum open files limit
+            if(new_fd == MAX_OPEN_FILES){
+                return -EOTHERS;
+            }
         }
-        //can check for maximum open files limit
         current->files[new_fd]=current->files[oldfd];
         current->files[new_fd]->ref_count++;
         return new_fd;
@@ -300,6 +341,9 @@ int fd_dup2(struct exec_context *current, int oldfd, int newfd)
     *  Incase of Error return valid Error code 
     * */
     int ret_fd = -EINVAL; 
+    if(oldfd >= MAX_OPEN_FILES || newfd >= MAX_OPEN_FILES){
+        return -EOTHERS;
+    }
     if(current->files[oldfd]){
         if(current->files[newfd]&&oldfd!=newfd){
             current->files[newfd]->fops->close(current->files[newfd]);

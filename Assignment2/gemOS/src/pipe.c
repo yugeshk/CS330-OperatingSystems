@@ -37,19 +37,23 @@ int pipe_read(struct file *filep, char *buff, u32 count)
     *  Incase of Error return valid Error code 
     */
     int ret_fd = -EINVAL; 
+    if (filep == NULL || count < 0 || buff == NULL){
+        return ret_fd;
+    }
     if((filep->mode&0x1)&&(filep->pipe->is_ropen)){
         int s_pos = filep->pipe->read_pos;
-        int len = count>filep->pipe->buffer_offset-s_pos?filep->pipe->buffer_offset-s_pos:count;
-        if(len+s_pos>4096){
-            len = 4096-s_pos;
+        int len = count>filep->pipe->buffer_offset?filep->pipe->buffer_offset:count;
+        if(len>4096){
+            return -EOTHERS;
         }
         if(len <= 0){
             return 0;
         }
         for(int i=0;i<len;i++){
-            buff[i]=filep->pipe->pipe_buff[i+s_pos];
+            buff[i]=filep->pipe->pipe_buff[(i+s_pos)%4096];
         }
-        filep->pipe->read_pos=s_pos+len;
+        filep->pipe->read_pos=(s_pos+len)%4096;
+        filep->pipe->buffer_offset-=len;
         return len;
     }
     
@@ -66,18 +70,21 @@ int pipe_write(struct file *filep, char *buff, u32 count)
     *  Incase of Error return valid Error code 
     */
     int ret_fd = -EINVAL; 
+    if (filep == NULL || count < 0 || buff == NULL){
+        return ret_fd;
+    }
     if((filep->mode&0x2)&&(filep->pipe->is_wopen)){
         int s_pos = filep->pipe->write_pos;
-        if(count+s_pos>4096){
-            count = 4096-s_pos;
+        if(filep->pipe->buffer_offset+count > 4096){
+            return -EOTHERS;
         }
-        for(int i=0;i<count;i++){
-            filep->pipe->pipe_buff[i+s_pos]=buff[i];
-        }
-        if(filep->pipe->buffer_offset < s_pos + count)
-            filep->pipe->buffer_offset = s_pos+count;    
 
-        filep->pipe->write_pos=count+s_pos;
+        for(int i=0;i<count;i++){
+            filep->pipe->pipe_buff[(i+s_pos)%4096]=buff[i];
+        }
+        
+        filep->pipe->buffer_offset+=count;
+        filep->pipe->write_pos=(count+s_pos)%4096;
         return count;
     }
     return ret_fd;
@@ -93,6 +100,11 @@ int create_pipe(struct exec_context *current, int *fd)
     *  Incase of Error return valid Error code 
     */
     int ret_fd = -EINVAL; 
+
+    if (current == NULL || fd == NULL){
+        return ret_fd;
+    }
+
     struct file* file_0 = alloc_file();
     struct file* file_1 = alloc_file();
     struct pipe_info *mypipe = alloc_pipe_info();

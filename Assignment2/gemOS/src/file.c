@@ -187,6 +187,7 @@ static int do_write_regular(struct file *filep, char * buff, u32 count)
         return ret_fd;
     }
     if(filep->mode&0x2){
+
         int bytes_written = flat_write(filep->inode, buff, count, &(filep->offp));
         if( bytes_written < 0 ){
             return -EINVAL;
@@ -349,9 +350,9 @@ int fd_dup2(struct exec_context *current, int oldfd, int newfd)
     if(current->files[oldfd]){
         if(current->files[newfd]&&oldfd!=newfd){
             current->files[newfd]->fops->close(current->files[newfd]);
+            current->files[oldfd]->ref_count++;
         }
         current->files[newfd]=current->files[oldfd];
-        current->files[oldfd]->ref_count++;
         return newfd;
     }                                
     else{

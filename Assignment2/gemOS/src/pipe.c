@@ -119,6 +119,7 @@ int create_pipe(struct exec_context *current, int *fd)
     file_0->pipe->read_pos=0;
     file_0->pipe->write_pos=0;
     file_0->pipe->is_ropen=1;
+    file_0->pipe->buffer_offset=0;
     file_1->type = PIPE;
     file_1->mode = O_WRITE;
     file_1->offp=0;
@@ -130,20 +131,24 @@ int create_pipe(struct exec_context *current, int *fd)
     file_1->pipe->read_pos=0;
     file_1->pipe->write_pos=0;
     file_1->pipe->is_wopen=1;
+    file_1->pipe->buffer_offset=0;
 
-    fd[0]=0;
+    fd[0]=3;
     while(current->files[fd[0]]){
         fd[0]++;
+        if(fd[0]>MAX_OPEN_FILES){
+            return -EOTHERS;
+        }
     }
     current->files[fd[0]]=file_0;
     fd[1]=fd[0];
     while(current->files[fd[1]]){
         fd[1]++;
+        if(fd[1]>MAX_OPEN_FILES){
+            return -EOTHERS;
+        }
     }
     current->files[fd[1]]=file_1;
-    if(fd[0]>=16||fd[1]>=16){
-        return -EINVAL;
-    }
 
     return 1;
     return ret_fd;
